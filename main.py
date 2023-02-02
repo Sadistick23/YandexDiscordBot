@@ -1,6 +1,6 @@
+#!/usr/bin/python3
 import os
-import asyncio
-from asyncio import run_coroutine_threadsafe
+import random
 from os.path import join, dirname
 from dotenv import load_dotenv
 from yandex_music import Client
@@ -10,17 +10,18 @@ from discord.ext import commands
 dotenv_path = join(dirname(__file__), '.env')
 load_dotenv(dotenv_path)
 token = os.environ.get("TOKEN")
+FFMPEG = os.environ.get("FFMPEG")
+PREFIX = os.environ.get("PREFIX")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
 client = Client(token).init()
 
 FFMPEG_OPTIONS = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
-
-
-bot = commands.Bot(command_prefix='-', help_command=None, intents=discord.Intents.all())
-
-
+bot = commands.Bot(command_prefix=PREFIX, help_command=None, intents=discord.Intents.all())
 arg = 0
+num = 0
+global playList
+playList = []
 
 
 def plusNumber(num):
@@ -28,19 +29,32 @@ def plusNumber(num):
     arg += num
 
 
-def findUrl(ctx, url):
-    global words
-    global trackParse
-    words = False
-    trackParse = False
-    while url[:23] == 'https://music.yandex.ru':
-        words = [x for x in url.split('/') if x]
-        getTrack()
-        break
+def nextNumber():
+    global num
+    num += 1
+
+
+def findTrack(ctx, params):
+    if params[:23] == 'https://music.yandex.ru':
+        words = [x for x in params.split('/') if x]
+        while words[2] == 'users':
+            tracksUsers = client.usersPlaylists(words[5], words[3]).tracks
+            for tracks in tracksUsers:
+                track_text = {'id': f'{tracks.track.id}', 'title': f'{tracks.track.title}', 'artist': f'{tracks.track.artists[0].name}'}
+                playList.append(track_text)
+            break
+        while words[2] == 'album':
+            tracksAlbum = client.albums_with_tracks(words[3]).volumes[0]
+            for tracks in tracksAlbum:
+                track_text = {'id': f'{tracks.id}', 'title': f'{tracks.title}', 'artist': f'{tracks.artists[0].name}'}
+                playList.append(track_text)
+            break
     else:
-        global TrackByName
         TrackByName = ctx.message.content[6:]
-        getTrackByName()
+        tracksName = client.search(TrackByName, False, 'track', 0, False).tracks.results
+        for tracks in tracksName:
+            track_text = {'id': f'{tracks.id}', 'title': f'{tracks.title}', 'artist': f'{tracks.artists[0].name}'}
+            playList.append(track_text)
 
 
         # https://music.yandex.ru/album/12565211/track/72798711
@@ -48,81 +62,52 @@ def findUrl(ctx, url):
         # https://music.yandex.ru/album/3087311/track/28421144
 
 
-def getTrack():
-    global tracksAlbom
-    while words[2] == 'users':
-        tracksAlbom = client.usersPlaylists(words[5], words[3]).tracks[arg]
-        break
-    while words[2] == 'album':
-        tracksAlbom = client.albums_with_tracks(words[3]).volumes[0][arg]
-        break
-
-
-def getTrackByName():
-    global trackParse
-    trackParse = client.search(TrackByName, False, 'track', 0, False).tracks.results[arg]
-
-
-@bot.command(aliases=['здфн'])
-async def play(ctx, url):
+@bot.command(aliases=['здфн', 'играть', 'плэй', 'песня', 'сонг'])
+async def play(ctx, params):
     voice_state = ctx.author.voice
     if voice_state is not None:
-        findUrl(ctx, url)
+        findTrack(ctx, params)
         vc = await voice_state.channel.connect()
-        while words:
-            while words[2] == 'users':
-                await ctx.send(f"Сейчас играет ({tracksAlbom.track.title})")
-                link = client.tracks_download_info(tracksAlbom.id, True, None)[2].direct_link
-                vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-                break
-            while words[2] == 'album':
-                await ctx.send(f"Сейчас играет ({tracksAlbom.title})")
-                link = client.tracks_download_info(tracksAlbom.id, True, None)[2].direct_link
-                vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-                break
-            break
-        while trackParse:
-            onePlay = client.tracks_download_info(trackParse.id, True, None)[2].direct_link
-            vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=onePlay, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-            await ctx.send(f"Сейчас играет ({trackParse.title})")
-            break
-
+        link = client.tracks_download_info(playList[arg].get('id'), True, None)[2].direct_link
+        vc.play(discord.FFmpegPCMAudio(executable=FFMPEG, source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
+        embed = discord.Embed(title="Сейчас играет:")
+        embed.add_field(name=f"Название: ", value=f"""```py\n'{playList[arg].get('title')}'\n```""", inline=False)
+        embed.add_field(name=f"Автор: ", value=f"""```ps1\n[ {playList[arg].get('artist')} ]\n```""", inline=False)
+        await ctx.send(embed=embed)
     else:
         await ctx.channel.send("Вы должны находиться в канале, что бы бот смог подключиться к вам")
 
 
 def next(ctx):
     vc = ctx.voice_client
-    while words:
-        plusNumber(1)
-        getTrack()
-        link = client.tracks_download_info(tracksAlbom.id, True, None)[2].direct_link
-        vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-        break
-    while trackParse:
-        plusNumber(1)
-        getTrackByName()
-        onePlay = client.tracks_download_info(trackParse.id, True, None)[2].direct_link
-        vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=onePlay, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-        break
+    nextNumber()
+    link = client.tracks_download_info(playList[num].get('id'), True, None)[2].direct_link
+    vc.play(discord.FFmpegPCMAudio(executable=FFMPEG, source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
 
 
-@bot.command(aliases=['ылшз', 'next', 'туче'])
+@bot.command(aliases=['ыргааду', 'перемешать', 'mix', 'ьшч'])
+async def shuffle(ctx):
+    random.shuffle(playList)
+    vc = ctx.voice_client
+    vc.stop()
+    playShuffle = client.tracks_download_info(playList[arg].get('id'), True, None)[2].direct_link
+    vc.play(discord.FFmpegPCMAudio(executable=FFMPEG, source=playShuffle, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
+    embed = discord.Embed(title="Сейчас играет:")
+    embed.add_field(name=f"Название: ", value=f"""```py\n'{playList[arg].get('title')}'\n```""", inline=False)
+    embed.add_field(name=f"Автор: ", value=f"""```ps1\n[ {playList[arg].get('artist')} ]\n```""", inline=False)
+    await ctx.send(embed=embed)
+
+
+@bot.command(aliases=['ылшз', 'next', 'туче', 'пропуск', 'пропустить', 'скип'])
 async def skip(ctx, numbers=1):
     vc = ctx.voice_client
     vc.stop()
-    while words:
-        plusNumber(numbers - 1)
-        getTrack()
-        link = client.tracks_download_info(tracksAlbom.id, True, None)[2].direct_link
-        vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-        break
-    while trackParse:
-        plusNumber(numbers)
-        getTrackByName()
-        onePlay = client.tracks_download_info(trackParse.id, True, None)[2].direct_link
-        vc.play(discord.FFmpegPCMAudio(executable="ffmpeg\\ffmpeg.exe", source=onePlay, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
-        break
+    plusNumber(numbers)
+    link = client.tracks_download_info(playList[arg].get('id'), True, None)[2].direct_link
+    vc.play(discord.FFmpegPCMAudio(executable=FFMPEG, source=link, **FFMPEG_OPTIONS), after=lambda e: print('Player error: %s' % e) if e else next(ctx))
+
+
+#lambda e: print('Player error: %s' % e) if e else next(ctx))
 
 
 @bot.command(aliases=['ыещз', 'stop'])
@@ -138,31 +123,15 @@ async def leave(ctx):
         await ctx.send("Бот не подключен к голосовому каналу.")
 
 
-class Buttons(discord.ui.View):
-    def __init__(self, *, timeout=180):
-        super().__init__(timeout=timeout)
-    @discord.ui.button(label="Выбрать", style=discord.ButtonStyle.gray)
-    async def gray_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content=f"Песня выбрана {trackParse[0].title}")
-
-
 @bot.command(aliases=['song', 'ыщтп', 's', 'ы'])
 async def already_song(ctx):
     voice = discord.utils.get(bot.voice_clients, guild=ctx.guild)
     if not voice == None:
-        while ctx.voice_client.is_playing() == True:
-            while words:
-                while words[2] == 'users':
-                    await ctx.send(f"Сейчас играет ({tracksAlbom.track.title})")
-                    break
-                while words[2] == 'album':
-                    await ctx.send(f"Сейчас играет ({tracksAlbom.title})")
-                    break
-                break
-            while trackParse:
-                await ctx.send(f"Сейчас играет ({trackParse.title})")
-                break
-            break
+        if ctx.voice_client.is_playing() == True:
+            embed = discord.Embed(title="Сейчас играет:")
+            embed.add_field(name=f"Название: ", value=f"""```py\n'{playList[arg].get('title')}'\n```""", inline=False)
+            embed.add_field(name=f"Автор: ", value=f"""```ps1\n[ {playList[arg].get('artist')} ]\n```""", inline=False)
+            await ctx.send(embed=embed)
         else:
             await ctx.send("Бот ничего не играет")
     else:
@@ -172,11 +141,27 @@ async def already_song(ctx):
 @bot.command(aliases=['рудз'])
 async def help(ctx):
     embed = discord.Embed(title="Помощь", description="Список команд")
-    embed.add_field(name="-song or (-ыщтп, -s, -ы)", value="Показывает воспроизводимую в данный момент песню", inline=False)
-    embed.add_field(name="-find or (-аштв)", value="Находит песню по названию", inline=False)
+    embed.add_field(name="-play or (-здфн)", value="Находит альбом по URL или названию", inline=False)
     embed.add_field(name="-skip or (-ылшз, -next, -туче)", value="Пропускает теущую песню, если вести число то пропустит несколько", inline=False)
-    embed.add_field(name="-play or (-здфн)", value="Находит альбом по URL", inline=False)
+    embed.add_field(name="-song or (-ыщтп, -s, -ы)", value="Показывает воспроизводимую в данный момент песню", inline=False)
+    embed.add_field(name="-shuffle or (-ырфааду)", value="Перемешивает плейлист", inline=False)
     await ctx.send(embed=embed)
+
+
+@bot.command(aliases=['дшые'])
+async def list(ctx):
+    embed = discord.Embed(title="Плейлист песен")
+    embed.add_field(name="Позапрошлый", value=f"""```py\n'{playList[arg - 2].get('title')}'\n[ {playList[arg - 2].get('artist')} ]\n```""", inline=False)
+    embed.add_field(name="Прошлый", value=f"""```py\n'{playList[arg - 1].get('title')}'\n[ {playList[arg - 1].get('artist')} ]\n```""", inline=False)
+    embed.add_field(name="Текущий", value=f"""```py\n'{playList[arg].get('title')}'\n[ {playList[arg].get('artist')} ]\n```""", inline=False)
+    embed.add_field(name="Следующий", value=f"""```py\n'{playList[arg + 1].get('title')}'\n[ {playList[arg + 1].get('artist')} ]\n```""", inline=False)
+    embed.add_field(name="Через один", value=f"""```py\n'{playList[arg + 2].get('title')}'\n[ {playList[arg + 2].get('artist')} ]\n```""", inline=False)
+    await ctx.send(embed=embed)
+
+
+@bot.command(aliases=['зштп'])
+async def ping(ctx):
+    await ctx.send('Pong! {0}'.format(round(bot.latency, 1)))
 
 
 bot.run(token=DISCORD_TOKEN)
